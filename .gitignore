@@ -1,0 +1,15 @@
+# build inputs and outputs never enter Git
+dxb/
+build/
+*.kc
+kernel.*
+*.dmg
+*.pkg
+*.ipsw
+*.im4p
+*.aea
+*.key
+*.pem
+.env
+.env.*
+__pycache__/

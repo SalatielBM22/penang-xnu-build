@@ -1,0 +1,112 @@
+name: measure-xnu-baseline
+
+# Builds an UNMODIFIED public Apple XNU tag with the official Xcode toolchain on a GitHub-hosted
+# Apple-silicon runner, to measure build time and validate the provenance pipeline.
+# It is a reference build (Apple machine config), not a kernel for any non-Apple device.
+
+on:
+  workflow_dispatch:
+    inputs:
+      macos_version:
+        description: "darwin-xnu-build MACOS_VERSION (15.6 -> distribution-macOS macos-156)"
+        default: "15.6"
+        required: true
+      expected_xnu_tag:
+        description: "XNU tag the release.json must resolve to (the job fails otherwise)"
+        default: "xnu-11417.140.69"
+        required: true
+      machine_config:
+        description: "XNU MACHINE_CONFIG"
+        default: "VMAPPLE"
+        required: true
+      kernel_config:
+        description: "XNU KERNEL_CONFIG"
+        default: "RELEASE"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: measure-${{ inputs.macos_version }}-${{ inputs.machine_config }}-${{ inputs.kernel_config }}
+  cancel-in-progress: false
+
+env:
+  DXB_REPO: https://github.com/blacktop/darwin-xnu-build.git
+  DXB_COMMIT: 663906528d1cd5ea8fde7de6f16de73db9511549
+  ARCH_CONFIG: ARM64
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner facts
+        shell: bash
+        run: bash scripts/runner_facts.sh | tee runner-facts.txt
+
+      - name: Fetch pinned darwin-xnu-build
+        shell: bash
+        run: |
+          git init -q dxb
+          git -C dxb fetch -q --depth 1 "$DXB_REPO" "$DXB_COMMIT"
+          git -C dxb checkout -q FETCH_HEAD
+          test "$(git -C dxb rev-parse HEAD)" = "$DXB_COMMIT"
+
+      - name: Resolve and check the XNU tag
+        shell: bash
+        run: bash scripts/check_xnu_tag.sh "${{ inputs.macos_version }}" "${{ inputs.expected_xnu_tag }}" dxb/build.sh
+
+      - name: Install KDK only if Apple-signed
+        shell: bash
+        run: bash scripts/install_kdk_verified.sh "${{ inputs.macos_version }}" dxb/build.sh kdk-provenance.txt
+
+      - name: Build XNU (timed)
+        shell: bash
+        working-directory: dxb
+        env:
+          MACOS_VERSION: ${{ inputs.macos_version }}
+          MACHINE_CONFIG: ${{ inputs.machine_config }}
+          KERNEL_CONFIG: ${{ inputs.kernel_config }}
+        run: |
+          start=$(date +%s)
+          ./build.sh 2>&1 | tee ../build.log
+          echo "BUILD_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+
+      - name: Build report
+        shell: bash
+        run: |
+          kc=$(echo '${{ inputs.kernel_config }}.${{ inputs.machine_config }}' | tr '[:upper:]' '[:lower:]')
+          python3 scripts/build_report.py \
+            --kernel "dxb/build/xnu.obj/kernel.${kc}" \
+            --xnu-tag "${{ inputs.expected_xnu_tag }}" --macos-version "${{ inputs.macos_version }}" \
+            --machine-config "${{ inputs.machine_config }}" --kernel-config "${{ inputs.kernel_config }}" \
+            --dxb-commit "$DXB_COMMIT" --build-seconds "$BUILD_SECONDS" \
+            --runner-facts runner-facts.txt --kdk-provenance kdk-provenance.txt --out build-report.json
+          cat build-report.json
+
+      - name: Provenance attestation (Sigstore)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dxb/build/xnu.obj/kernel.*
+            build-report.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: xnu-${{ inputs.expected_xnu_tag }}-${{ inputs.kernel_config }}-${{ inputs.machine_config }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            dxb/build/xnu.obj/kernel.*
+            build-report.json
+            build.log
+            runner-facts.txt
+            kdk-provenance.txt
