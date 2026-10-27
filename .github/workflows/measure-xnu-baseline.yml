@@ -83,6 +83,7 @@ jobs:
         shell: bash
         run: |
           kc=$(echo '${{ inputs.kernel_config }}.${{ inputs.machine_config }}' | tr '[:upper:]' '[:lower:]')
+          echo "KERNEL_PATH=dxb/build/xnu.obj/kernel.${kc}" >> "$GITHUB_ENV"
           python3 scripts/build_report.py \
             --kernel "dxb/build/xnu.obj/kernel.${kc}" \
             --xnu-tag "${{ inputs.expected_xnu_tag }}" --macos-version "${{ inputs.macos_version }}" \
@@ -95,7 +96,7 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            dxb/build/xnu.obj/kernel.*
+            ${{ env.KERNEL_PATH }}
             build-report.json
 
       - name: Upload artifacts
@@ -105,7 +106,7 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           path: |
-            dxb/build/xnu.obj/kernel.*
+            ${{ env.KERNEL_PATH }}
             build-report.json
             build.log
             runner-facts.txt
