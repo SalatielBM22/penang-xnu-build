@@ -3,7 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 for s in scripts/*.sh; do bash -n "$s"; done; echo "SHELL_SYNTAX: PASS"
-python3 -m py_compile scripts/build_report.py; echo "PY_SYNTAX: PASS"
+python3 -m py_compile scripts/build_report.py scripts/check_pkg_signature.py; echo "PY_SYNTAX: PASS"
+bash scripts/test_pkg_signature.sh
 python3 - <<'EOF'
 import yaml, sys
 w = yaml.safe_load(open(".github/workflows/measure-xnu-baseline.yml"))

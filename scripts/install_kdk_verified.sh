@@ -25,7 +25,7 @@ pkg=$(find "$mnt" -maxdepth 1 -name '*.pkg' | head -1)
 echo "kdk_pkg_sha256=$(shasum -a 256 "$pkg" | cut -d' ' -f1)" | tee -a "$out"
 sig=$(pkgutil --check-signature "$pkg" || true)
 printf '%s\n' "$sig" | sed 's/^/pkg_signature: /' | tee -a "$out"
-if ! printf '%s\n' "$sig" | grep -q "signed by a certificate trusted by" || ! printf '%s\n' "$sig" | grep -q "Apple Root CA"; then
+if ! printf '%s\n' "$sig" | python3 "$(dirname "$0")/check_pkg_signature.py" | tee -a "$out"; then
   echo "REFUSED: KDK package is not signed with a trusted Apple chain"; hdiutil detach "$mnt"; exit 4
 fi
 sudo mkdir -p /Library/Developer/KDKs
