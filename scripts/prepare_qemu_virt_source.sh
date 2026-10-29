@@ -7,6 +7,9 @@
 set -euo pipefail
 tag="$1"; commit="$2"; patch="$3"; patch_sha="$4"; dest="$5"; out="$6"
 [ ! -e "$dest" ] || { echo "REFUSED: $dest already exists (stale or reused source)"; exit 2; }
+[ -f "$patch" ] || { echo "REFUSED: patch not found: $patch"; exit 3; }
+# git -C resolves relative paths inside the clone, so pin the caller-relative path now.
+patch="$(cd "$(dirname "$patch")" && pwd)/$(basename "$patch")"
 got=$(shasum -a 256 "$patch" | cut -d' ' -f1)
 [ "$got" = "$patch_sha" ] || { echo "REFUSED: patch sha256 $got != pinned $patch_sha"; exit 3; }
 git clone -q --branch "$tag" https://github.com/apple-oss-distributions/xnu.git "$dest"
