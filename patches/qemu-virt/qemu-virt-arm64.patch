@@ -28,6 +28,17 @@
  
  ifeq ($(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG),)
  
+@@ -1052,8 +1057,10 @@
+ LD_KERNEL_ARCHIVES = $(LDFLAGS_KERNEL_SDK) -lfirehose_kernel
+ 
+ # Link binary support library
++ifneq ($(CURRENT_MACHINE_CONFIG),QEMU_VIRT)
+ ifneq ($(KDKROOT),)
+         LDFLAGS_KERNEL_ONLY += -rdynamic -Wl,-force_load,$(KDKROOT)/System/Library/KernelSupport/lib$(CURRENT_MACHINE_CONFIG).os.$(CURRENT_KERNEL_CONFIG).a
++endif
+ endif
+ 
+ #
 --- a/pexpert/pexpert/arm64/board_config.h
 +++ b/pexpert/pexpert/arm64/board_config.h
 @@ -273,6 +273,10 @@
@@ -93,7 +104,7 @@
  	// Unmask external IRQs if we're restarting from non-retention WFI
 --- /dev/null
 +++ b/pexpert/pexpert/arm64/QEMU_VIRT.h
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,80 @@
 +/* SPDX-License-Identifier: MIT
 + * Experimental QEMU virt / Cortex-A76 platform for public XNU 11417.140.69.
 + * Source: apple-oss-distributions/xnu @ 43a90889846e00bfb5cf1d255cdc0a701a1e05a4.
@@ -108,6 +119,13 @@
 +#endif
 +#if CPU_HAS_APPLE_PAC || HAS_PARAVIRTUALIZED_PAC || HAS_APPLE_PAC
 +#error QEMU_VIRT does not implement the Apple PAC key contract
++#endif
++
++/* This development platform has architectural page permissions, without
++ * Apple's physical lockdown or protected page-table monitor hardware.
++ */
++#if defined(CONFIG_SPTM) || XNU_MONITOR || defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
++#error QEMU_VIRT has no Apple memory-protection monitor or KTRR/CTRR hardware
 +#endif
 +
 +/* kalloc_type metadata is a security contract, including without PAC.
@@ -167,3 +185,151 @@
 +#define PL011_UART
 +#endif
 +#endif
+--- a/osfmk/arm/cpu_common.c
++++ b/osfmk/arm/cpu_common.c
+@@ -629,7 +629,7 @@
+ void
+ cpu_exit_wait(int cpu_id)
+ {
+-#if !APPLEVIRTUALPLATFORM /* AVP doesn't provide an equivalent poll-for-powerdown operation */
++#if !APPLEVIRTUALPLATFORM && !defined(QEMU_VIRT) /* No Apple powerdown PIO on AVP or QEMU virt. */
+ #if USE_APPLEARMSMP
+ 	if (!ml_is_quiescing()) {
+ 		// For runtime disable (non S2R) the CPU will shut down immediately.
+@@ -662,7 +662,7 @@
+ 		}
+ 	}
+ #endif /* USE_APPLEARMSMP */
+-#endif /* !APPLEVIRTUALPLATFORM */
++#endif /* !APPLEVIRTUALPLATFORM && !defined(QEMU_VIRT) */
+ 
+ 	if (cpu_id != master_cpu || (support_bootcpu_shutdown && !ml_is_quiescing())) {
+ 		// For S2R, ml_arm_sleep() will do some extra polling after setting ARM_CPU_ON_SLEEP_PATH.
+--- a/config/MASTER
++++ b/config/MASTER
+@@ -331,6 +331,12 @@
+ # Compile XNU with PPL support.
+ options   CONFIG_PMAP_PPL			# <config_pmap_ppl>
+ 
++# QEMU virt builds the public ARM64 implementation, without binary KernelSupport.
++#if SOC_CONFIG_qemu_virt
++#  KERNEL_BASE = [ nos_arm_asm nos_arm_pmap qemu_virt_sources ]
++#endif
++options   QEMU_VIRT_SOURCES         # <qemu_virt_sources>
++
+ options   NOS_ARM_ASM			# <nos_arm_asm>
+ options   NOS_ARM_PMAP			# <nos_arm_pmap>
+ 
+--- a/config/MASTER.arm64
++++ b/config/MASTER.arm64
+@@ -50,7 +50,7 @@
+ #  LIBKERN_RELEASE =[ LIBKERN_BASE ]
+ #  LIBKERN_DEV =    [ LIBKERN_BASE iotracking ]
+ #  LIBKERN_DEBUG =  [ LIBKERN_BASE iotracking ]
+-#if SOC_IS_VIRTUALIZED
++#if SOC_IS_VIRTUALIZED || SOC_CONFIG_qemu_virt
+ #  CPU_COUNTERS_BASE = [ ]
+ #else /*!SOC_IS_VIRTUALIZED*/
+ #  CPU_COUNTERS_BASE = [ config_cpu_counters config_pervasive_cpi config_pervasive_energy ]
+--- a/config/MASTER.arm64.MacOSX
++++ b/config/MASTER.arm64.MacOSX
+@@ -56,7 +56,7 @@
+ #  LIBKERN_RELEASE =[ LIBKERN_BASE zlib ]
+ #  LIBKERN_DEV =    [ LIBKERN_BASE zlib iotracking ]
+ #  LIBKERN_DEBUG =  [ LIBKERN_BASE zlib iotracking ]
+-#if SOC_IS_VIRTUALIZED
++#if SOC_IS_VIRTUALIZED || SOC_CONFIG_qemu_virt
+ #  CPU_COUNTERS_BASE = [ ]
+ #else /*!SOC_IS_VIRTUALIZED*/
+ #  CPU_COUNTERS_BASE = [ config_cpu_counters config_pervasive_cpi config_pervasive_energy ]
+--- a/osfmk/conf/files.arm64
++++ b/osfmk/conf/files.arm64
+@@ -1,3 +1,5 @@
++OPTIONS/qemu_virt_sources		optional qemu_virt_sources
++
+ OPTIONS/fb			optional fb
+ 
+ OPTIONS/debug			optional debug
+@@ -33,10 +35,10 @@
+ osfmk/arm64/WKdmData.s		standard
+ osfmk/arm64/lz4_decode_arm64.s  standard
+ osfmk/arm64/lz4_encode_arm64.s  standard
+-osfmk/arm64/amcc_rorgn_ppl.c optional nos_arm_asm config_pmap_ppl
+-osfmk/arm64/amcc_rorgn_ppl_amcc.c optional nos_arm_asm config_pmap_ppl
+-osfmk/arm64/amcc_rorgn_ppl_ctrr3.c optional nos_arm_asm config_pmap_ppl
+-osfmk/arm64/amcc_rorgn_common.c optional nos_arm_asm
++osfmk/arm64/amcc_rorgn_ppl.c optional nos_arm_asm config_pmap_ppl not qemu_virt_sources
++osfmk/arm64/amcc_rorgn_ppl_amcc.c optional nos_arm_asm config_pmap_ppl not qemu_virt_sources
++osfmk/arm64/amcc_rorgn_ppl_ctrr3.c optional nos_arm_asm config_pmap_ppl not qemu_virt_sources
++osfmk/arm64/amcc_rorgn_common.c optional nos_arm_asm not qemu_virt_sources
+ osfmk/arm64/bcopy.s standard
+ osfmk/arm64/bzero.s standard
+ osfmk/arm/caches.c		standard
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -84,8 +84,10 @@
+ 
+ #include <arm64/proc_reg.h>
+ #include <pexpert/arm64/boot.h>
++#if !defined(QEMU_VIRT)
+ #include <arm64/ppl/sart.h>
+ #include <arm64/ppl/uat.h>
++#endif
+ 
+ #if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
+ #include <arm64/amcc_rorgn.h>
+@@ -2312,6 +2314,7 @@
+ 	 */
+ 	pmap_data_bootstrap();
+ 
++#if !defined(QEMU_VIRT) /* No Apple GPU/storage IOMMUs on QEMU virt. */
+ 	/**
+ 	 * Bootstrap any necessary UAT data structures and values needed from the device tree.
+ 	 */
+@@ -2322,6 +2325,7 @@
+ 	 * Bootstrap any necessary SART data structures and values needed from the device tree.
+ 	 */
+ 	sart_bootstrap();
++#endif /* !defined(QEMU_VIRT) */
+ 
+ 	/**
+ 	 * Don't make any assumptions about the alignment of avail_start before this
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -2177,7 +2177,9 @@
+ 	arm_vm_physmap_init(args);
+ 	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
+ 
++#if !defined(QEMU_VIRT)
+ 	ml_enable_monitor();
++#endif /* QEMU virt has no Apple monitor; TTBR setup and TLB flush remain. */
+ 
+ 	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
+ 
+--- a/SETUP/config/doconf
++++ b/SETUP/config/doconf
+@@ -78,6 +78,7 @@
+ set DEF_SPTM="-UMASTER_CONFIG_ENABLE_SPTM"
+ set DEF_BUILD=""
+ set DEF_TAG=""
++set DEF_QEMU_VIRT="-USOC_CONFIG_qemu_virt"
+ 
+ 
+ unset doconfig
+@@ -108,6 +109,7 @@
+ 		exit 1
+ 	    endif
+ 	    set SOC_CONFIG="$argv[2]"
++	    if ("$SOC_CONFIG" == "qemu_virt") set DEF_QEMU_VIRT=""
+ 	    if (`echo $SOC_CONFIG | awk '{print substr($0,0,2)}'` == "vm") then
+ 	        set DEF_AVP="-DSOC_IS_VIRTUALIZED"
+ 	    else
+@@ -203,7 +205,7 @@
+     cat $MASTER $MASTER_CPU - \
+         $MASTER $MASTER_CPU \
+     | \
+-    unifdef -t -DPLATFORM_${PLATFORM} -DCPU_$cpu -DSOC_CONFIG_${SOC_CONFIG} -DSYS_${SYS} $DEF_AVP $DEF_SEED $DEF_EXCLAVES $DEF_SPTM $DEF_BUILD $DEF_TAG - \
++    unifdef -t -DPLATFORM_${PLATFORM} -DCPU_$cpu -DSOC_CONFIG_${SOC_CONFIG} -DSYS_${SYS} $DEF_AVP $DEF_QEMU_VIRT $DEF_SEED $DEF_EXCLAVES $DEF_SPTM $DEF_BUILD $DEF_TAG - \
+     | \
+     sed -n \
+ 	-e "/^+/{" \

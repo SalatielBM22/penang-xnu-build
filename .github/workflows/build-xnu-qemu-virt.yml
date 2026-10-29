@@ -34,7 +34,7 @@ env:
   MACHINE_CONFIG: QEMU_VIRT
   KERNEL_CONFIG: RELEASE
   PLATFORM_PATCH: patches/qemu-virt/qemu-virt-arm64.patch
-  PLATFORM_PATCH_SHA256: 1ffa50d4d46a0e7ca88131cb1c7c663306953d313a43642b9a7b4d3fcd17d153
+  PLATFORM_PATCH_SHA256: eb0a909dd57db261a15c5f5e372a66b3bf64dac3f28b733bc3d6d53969e31166
   # Toolchain of the successful VMAPPLE run 40501706707; the job fails if the image changed it.
   DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
   EXPECTED_XCODE: Xcode 16.4 Build version 16F6
