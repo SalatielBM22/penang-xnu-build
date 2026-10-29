@@ -30,3 +30,13 @@ and checks the corrected reduced include path. This is not a complete
 the derived source on success or failure so a separately authorized run can
 prove whether the object was actually produced. Collector success alone
 does not satisfy P0.1G. See integration `reports/P0.1G-*` for the gate status.
+
+C02 BUILD_UNBLOCK_02 adds only the same platform-specific include guard in
+`osfmk/arm/machine_routines_common.c`. C01's `sleh.c` hunk is byte-preserved.
+The real-header regressions reproduce all four baseline MPIDR errors, omit
+the Apple header for QEMU_VIRT, and retain its tokens/dependencies for
+VMAPPLE and T6000. These are reduced include checks, not complete object builds.
+Both object/source evidence sets are uploaded on success or failure; validation
+of a new real ARM64 `machine_routines_common.o` still requires a separately
+authorized CI run. P0.2 remains BLOCKED and P0.3 LINK remains NOT_RUN.
+`CONFIG_PMAP_PPL` remains a static risk for a separate audit, unchanged here.

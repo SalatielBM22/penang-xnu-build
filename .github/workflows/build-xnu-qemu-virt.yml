@@ -34,7 +34,7 @@ env:
   MACHINE_CONFIG: QEMU_VIRT
   KERNEL_CONFIG: RELEASE
   PLATFORM_PATCH: patches/qemu-virt/qemu-virt-arm64.patch
-  PLATFORM_PATCH_SHA256: f3d1e0286ca0984e2db2d85c35dc85e3c55c10afdca4e418f0d32b6e16da328e
+  PLATFORM_PATCH_SHA256: 1d71f1c0b6ac1602b5e1937ea25481e9e3785b22382afb3a50dc6b9d7198e6a6
   # Toolchain of the successful VMAPPLE run 40501706707; the job fails if the image changed it.
   DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
   EXPECTED_XCODE: Xcode 16.4 Build version 16F6
@@ -122,6 +122,29 @@ jobs:
           } > sleh-object-evidence.txt
           cat sleh-object-evidence.txt
 
+      # C02 evidence only; object absence is not a compilation PASS.
+      - name: Preserve machine_routines_common object evidence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "build_commit=$GITHUB_SHA"
+            echo "run_id=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT"
+            echo "xnu_commit=$XNU_COMMIT patch_sha256=$PLATFORM_PATCH_SHA256"
+            if [ -f dxb/xnu/osfmk/arm/machine_routines_common.c ]; then
+              shasum -a 256 dxb/xnu/osfmk/arm/machine_routines_common.c
+              sed -n '48,58p' dxb/xnu/osfmk/arm/machine_routines_common.c
+            fi
+            if [ -d dxb/build/xnu.obj ]; then
+              while IFS= read -r obj; do
+                shasum -a 256 "$obj"
+                xcrun otool -hv "$obj"
+                xcrun nm -n "$obj"
+              done < <(find dxb/build/xnu.obj -type f -name machine_routines_common.o)
+            fi
+          } > machine-common-object-evidence.txt
+          cat machine-common-object-evidence.txt
+
       - name: Confirm darwin-xnu-build patched the source exactly as for VMAPPLE
         shell: bash
         run: |
@@ -189,6 +212,9 @@ jobs:
             sleh-object-evidence.txt
             dxb/build/xnu.obj/**/sleh.o
             dxb/xnu/osfmk/arm64/sleh.c
+            machine-common-object-evidence.txt
+            dxb/build/xnu.obj/**/machine_routines_common.o
+            dxb/xnu/osfmk/arm/machine_routines_common.c
 
       - name: First errors (failed run only)
         if: failure()
@@ -220,3 +246,6 @@ jobs:
             sleh-object-evidence.txt
             dxb/build/xnu.obj/**/sleh.o
             dxb/xnu/osfmk/arm64/sleh.c
+            machine-common-object-evidence.txt
+            dxb/build/xnu.obj/**/machine_routines_common.o
+            dxb/xnu/osfmk/arm/machine_routines_common.c
