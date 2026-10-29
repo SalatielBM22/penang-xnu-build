@@ -1,0 +1,193 @@
+name: build-xnu-qemu-virt
+
+# P0.1D experimental build: public XNU xnu-11417.140.69 (pinned commit) plus the Penang
+# QEMU_VIRT platform patch (native arm64 / Cortex-A76, no Apple PAC), built by the same pinned
+# darwin-xnu-build, Xcode 16.4 / Apple clang 17.0.0 and Apple-signed KDK 15.6 as the VMAPPLE
+# reference workflow, which stays unchanged (measure-xnu-baseline.yml). Not an Apple config.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [exp/p0.1d-qemu-virt]
+    paths:
+      - .github/workflows/build-xnu-qemu-virt.yml
+      - patches/qemu-virt/**
+      - scripts/probe_xnu_builtins.sh
+      - scripts/prepare_qemu_virt_source.sh
+      - scripts/inspect_kernel_macho.py
+      - scripts/build_report.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qemu-virt-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DXB_REPO: https://github.com/blacktop/darwin-xnu-build.git
+  DXB_COMMIT: 663906528d1cd5ea8fde7de6f16de73db9511549
+  ARCH_CONFIG: ARM64
+  MACOS_VERSION: "15.6"
+  XNU_TAG: xnu-11417.140.69
+  XNU_COMMIT: 43a90889846e00bfb5cf1d255cdc0a701a1e05a4
+  MACHINE_CONFIG: QEMU_VIRT
+  KERNEL_CONFIG: RELEASE
+  PLATFORM_PATCH: patches/qemu-virt/qemu-virt-arm64.patch
+  PLATFORM_PATCH_SHA256: 1ffa50d4d46a0e7ca88131cb1c7c663306953d313a43642b9a7b4d3fcd17d153
+  # Toolchain of the successful VMAPPLE run 40501706707; the job fails if the image changed it.
+  DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+  EXPECTED_XCODE: Xcode 16.4 Build version 16F6
+  EXPECTED_CLANG: Apple clang version 17.0.0 (clang-1700.0.13.5)
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin the qualified toolchain
+        shell: bash
+        run: |
+          test -d "$DEVELOPER_DIR"
+          got_xcode=$(xcodebuild -version | tr '\n' ' ' | sed 's/ *$//')
+          got_clang=$(xcrun clang --version | head -1)
+          echo "xcode: ${got_xcode}"; echo "clang: ${got_clang}"
+          [ "$got_xcode" = "$EXPECTED_XCODE" ] || { echo "Xcode mismatch"; exit 1; }
+          [ "$got_clang" = "$EXPECTED_CLANG" ] || { echo "clang mismatch"; exit 1; }
+
+      - name: Runner facts
+        shell: bash
+        run: bash scripts/runner_facts.sh | tee runner-facts.txt
+
+      - name: Qualify XNU typed-allocator builtins by real compilation
+        shell: bash
+        run: bash scripts/probe_xnu_builtins.sh builtin-qualification.txt
+
+      - name: Fetch pinned darwin-xnu-build
+        shell: bash
+        run: |
+          git init -q dxb
+          git -C dxb fetch -q --depth 1 "$DXB_REPO" "$DXB_COMMIT"
+          git -C dxb checkout -q FETCH_HEAD
+          test "$(git -C dxb rev-parse HEAD)" = "$DXB_COMMIT"
+
+      - name: Resolve and check the XNU tag
+        shell: bash
+        run: bash scripts/check_xnu_tag.sh "$MACOS_VERSION" "$XNU_TAG" dxb/build.sh
+
+      - name: Prepare the pinned XNU source with the QEMU_VIRT patch
+        shell: bash
+        run: >-
+          bash scripts/prepare_qemu_virt_source.sh "$XNU_TAG" "$XNU_COMMIT"
+          "$PLATFORM_PATCH" "$PLATFORM_PATCH_SHA256" dxb/xnu source-provenance.txt
+
+      - name: Install KDK only if Apple-signed
+        shell: bash
+        run: bash scripts/install_kdk_verified.sh "$MACOS_VERSION" dxb/build.sh kdk-provenance.txt
+
+      - name: Build XNU (timed)
+        shell: bash
+        working-directory: dxb
+        run: |
+          start=$(date +%s)
+          ./build.sh 2>&1 | tee ../build.log
+          echo "BUILD_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+
+      - name: Confirm darwin-xnu-build patched the source exactly as for VMAPPLE
+        shell: bash
+        run: |
+          grep -aoE '(Applying patch: |Skipping patch )[^ ]*/patches/15\.0/[A-Za-z0-9_]+\.patch' build.log \
+            | sed -E 's#^(Applying|Skipping) patch:? .*/#\1 #' > dxb-patches.txt
+          cat dxb-patches.txt
+          printf '%s\n' 'Applying disable_bti.patch' 'Applying entitlements.patch' 'Applying iokit.patch' \
+            'Skipping link_kdk.patch' 'Skipping link_kdk146.patch' 'Skipping remove_tightbeam.patch' \
+            'Applying skywalk.patch' | diff - dxb-patches.txt
+
+      - name: Inspect the kernel Mach-O
+        shell: bash
+        run: |
+          kc=$(echo "${KERNEL_CONFIG}.${MACHINE_CONFIG}" | tr '[:upper:]' '[:lower:]')
+          kernel="dxb/build/xnu.obj/kernel.${kc}"
+          echo "KERNEL_PATH=${kernel}" >> "$GITHUB_ENV"
+          otool -hv "$kernel" | tee otool-header.txt
+          otool -l "$kernel" > otool-load-commands.txt
+          python3 scripts/inspect_kernel_macho.py "$kernel" --out macho-inspection.json
+          read -r start stop < <(python3 -c 'import json; e = int(json.load(open("macho-inspection.json"))["entries"][0], 16); print(f"{e:#x} {e + 0x40:#x}")')
+          xcrun llvm-objdump -d --start-address="$start" --stop-address="$stop" "$kernel" | tee entry-disasm.txt
+          python3 -c 'import json, sys; sys.exit(0 if json.load(open("macho-inspection.json"))["passed"] else 1)'
+
+      - name: Build report
+        shell: bash
+        run: |
+          python3 scripts/build_report.py \
+            --kernel "$KERNEL_PATH" --xnu-tag "$XNU_TAG" --macos-version "$MACOS_VERSION" \
+            --machine-config "$MACHINE_CONFIG" --kernel-config "$KERNEL_CONFIG" \
+            --dxb-commit "$DXB_COMMIT" --build-seconds "$BUILD_SECONDS" \
+            --runner-facts runner-facts.txt --kdk-provenance kdk-provenance.txt \
+            --kind EXPERIMENTAL_PATCHED_PUBLIC_XNU --patch "$PLATFORM_PATCH" \
+            --evidence builtins=builtin-qualification.txt --evidence source=source-provenance.txt \
+            --evidence dxb_patches=dxb-patches.txt --evidence macho=macho-inspection.json \
+            --out build-report.json
+          cat build-report.json
+
+      - name: Provenance attestation (Sigstore)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            ${{ env.KERNEL_PATH }}
+            build-report.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: xnu-${{ env.XNU_TAG }}-${{ env.KERNEL_CONFIG }}-${{ env.MACHINE_CONFIG }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ env.KERNEL_PATH }}
+            build-report.json
+            build.log
+            runner-facts.txt
+            kdk-provenance.txt
+            builtin-qualification.txt
+            source-provenance.txt
+            dxb-patches.txt
+            macho-inspection.json
+            otool-header.txt
+            otool-load-commands.txt
+            entry-disasm.txt
+            ${{ env.PLATFORM_PATCH }}
+
+      - name: First errors (failed run only)
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f build.log ]; then
+            grep -anE -m 40 '(error|fatal error):|\*\*\* \[|Error [0-9]+' build.log > first-errors.txt || true
+            cat first-errors.txt
+          fi
+
+      # Diagnostics only: no kernel, no attestation. A failed build is never a valid artifact.
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xnu-${{ env.XNU_TAG }}-${{ env.KERNEL_CONFIG }}-${{ env.MACHINE_CONFIG }}-FAILED-diagnostics
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            first-errors.txt
+            build.log
+            runner-facts.txt
+            builtin-qualification.txt
+            source-provenance.txt
+            kdk-provenance.txt
+            dxb-patches.txt
+            macho-inspection.json
+            otool-header.txt

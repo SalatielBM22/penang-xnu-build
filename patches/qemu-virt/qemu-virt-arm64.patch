@@ -1,0 +1,169 @@
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -29,7 +29,7 @@
+ else ifneq ($(findstring _host,$(RC_ProjectName)),)
+ SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
+ else
+-SUPPORTED_ARM64_MACHINE_CONFIGS = T6000 T6020 T6030 T6031 T6041 T8101 T8103 T8112 T8122 T8132 VMAPPLE
++SUPPORTED_ARM64_MACHINE_CONFIGS = T6000 T6020 T6030 T6031 T6041 T8101 T8103 T8112 T8122 T8132 VMAPPLE QEMU_VIRT
+ 
+ SPTM_ENABLED_SOCS_MacOSX = t6041 t8132
+ 
+@@ -80,6 +80,7 @@
+ MACHINE_FLAGS_ARM64_T6041 = -DARM64_BOARD_CONFIG_T6041			-mcpu=apple-m4
+ MACHINE_FLAGS_ARM64_T8122 = -DARM64_BOARD_CONFIG_T8122_T8130		-mcpu=apple-m3
+ MACHINE_FLAGS_ARM64_T8132 = -DARM64_BOARD_CONFIG_T8132			-mcpu=apple-m4
++MACHINE_FLAGS_ARM64_QEMU_VIRT = -DARM64_BOARD_CONFIG_QEMU_VIRT -mcpu=cortex-a76
+ MACHINE_FLAGS_ARM64_VMAPPLE = -DARM64_BOARD_CONFIG_VMAPPLE              -march=armv8.5a+sme2
+ 
+ 
+@@ -279,6 +280,10 @@
+ else
+ 
+ ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG ?=
++
++ifeq ($(CURRENT_MACHINE_CONFIG),QEMU_VIRT)
++export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := arm64
++endif
+ 
+ ifeq ($(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG),)
+ 
+--- a/pexpert/pexpert/arm64/board_config.h
++++ b/pexpert/pexpert/arm64/board_config.h
+@@ -273,6 +273,10 @@
+ 
+ 
+ 
++#ifdef ARM64_BOARD_CONFIG_QEMU_VIRT
++#include <pexpert/arm64/QEMU_VIRT.h>
++#endif
++
+ #ifdef ARM64_BOARD_CONFIG_VMAPPLE
+ #include <pexpert/arm64/VMAPPLE.h>
+ 
+--- a/pexpert/pexpert/arm64/Makefile
++++ b/pexpert/pexpert/arm64/Makefile
+@@ -32,7 +32,8 @@
+ 	H14.h \
+ 	H15.h \
+ 	H16.h \
+-	VMAPPLE.h
++	VMAPPLE.h \
++	QEMU_VIRT.h
+ 
+ 
+ # Headers installed into System.framework/PrivateHeaders (userspace internal SDK only).
+--- a/osfmk/arm64/proc_reg.h
++++ b/osfmk/arm64/proc_reg.h
+@@ -226,6 +226,12 @@
+ 
+ /* D-Cache, 128KB for AppleH16 PCore, 8-way. 64KB for ECore, 8-way. */
+ #define MMU_CLINE   6                      /* cache line size is 1<<MMU_CLINE (64) */
++
++#elif defined (QEMU_VIRT)
++
++/* QEMU Cortex-A76 has 64-byte I/D cache lines. */
++#define MMU_I_CLINE 6
++#define MMU_CLINE   6
+ 
+ #elif defined (VMAPPLE)
+ 
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -33,7 +33,10 @@
+ #include <pexpert/arm64/board_config.h>
+ #include <mach_assert.h>
+ #include <machine/asm.h>
++/* QEMU Cortex-A76 has no Apple implementation-defined registers to tune. */
++#if !defined(ARM64_BOARD_CONFIG_QEMU_VIRT)
+ #include <arm64/tunables/tunables.s>
++#endif
+ #include <arm64/exception_asm.h>
+ 
+ #if __ARM_KERNEL_PROTECT__
+@@ -782,7 +785,9 @@
+ 	// Read MIDR before start of per-SoC tunables
+ 	mrs x12, MIDR_EL1
+ 
++#if !defined(ARM64_BOARD_CONFIG_QEMU_VIRT)
+ 	APPLY_TUNABLES x12, x13, x14
++#endif
+ 
+ #if HAS_CLUSTER && !NO_CPU_OVRD
+ 	// Unmask external IRQs if we're restarting from non-retention WFI
+--- /dev/null
++++ b/pexpert/pexpert/arm64/QEMU_VIRT.h
+@@ -0,0 +1,73 @@
++/* SPDX-License-Identifier: MIT
++ * Experimental QEMU virt / Cortex-A76 platform for public XNU 11417.140.69.
++ * Source: apple-oss-distributions/xnu @ 43a90889846e00bfb5cf1d255cdc0a701a1e05a4.
++ * This describes the native ARM64 ABI, not Apple's arm64e/PAC ABI.
++ * No physical Qualcomm board, SMP or peripheral support is implied.
++ */
++#ifndef _PEXPERT_ARM64_QEMU_VIRT_H
++#define _PEXPERT_ARM64_QEMU_VIRT_H
++
++#if defined(__arm64e__) || defined(__ARM_FEATURE_PAUTH)
++#error QEMU_VIRT requires the native arm64 Cortex-A76 ABI
++#endif
++#if CPU_HAS_APPLE_PAC || HAS_PARAVIRTUALIZED_PAC || HAS_APPLE_PAC
++#error QEMU_VIRT does not implement the Apple PAC key contract
++#endif
++
++/* kalloc_type metadata is a security contract, including without PAC.
++ * Reject compatibility macros which replace the compiler's layout analysis.
++ */
++#if defined(XNU_KERNEL_PRIVATE) && !defined(ASSEMBLER) && !defined(__ASSEMBLER__)
++#if !__has_builtin(__builtin_xnu_type_signature) || \
++    !__has_builtin(__builtin_xnu_type_summary) || \
++    !__has_builtin(__builtin_xnu_types_compatible)
++#error QEMU_VIRT requires real XNU typed-allocation compiler builtins
++#endif
++#endif
++
++#define QEMU_VIRT                   1
++#define NO_MONITOR                  1
++#define NO_ECORE                    1
++#define MAX_CPUS                    1
++#define MAX_CPU_CLUSTERS             1
++#define MAX_L2_CLINE                 6
++#define CORE_NCTRS                   2
++#define USE_APPLEARMSMP              1
++#define NO_XNU_PLATFORM_ERROR_HANDLER 1
++
++#define __ARM_ARCH__                8
++#define __ARM_VMSA__                8
++#define __ARM_VFP__                 4
++#define __ARM_COHERENT_CACHE__       1
++#define __ARM_COHERENT_IO__          1
++#define __ARM_IC_NOALIAS_ICACHE__    1
++#define __ARM_DEBUG__               7
++#define __ARM_ENABLE_SWAP__         1
++#define __ARM_V8_CRYPTO_EXTENSIONS__ 1
++#define __ARM_PAN_AVAILABLE__       1
++#define __ARM_16K_PG__              1
++#define ARM_PARAMETERIZED_PMAP      1
++#define __ARM_MIXED_PAGE_SIZE__     1
++#define ARM_ARCH_TIMER
++#define HAS_GIC_V3                  1
++
++/* Architectural GICv3 definitions, matching the existing pe_fiq.c driver. */
++#define GIC_SPURIOUS_IRQ             1023
++#define GICR_PE_SIZE                 0x20000
++#define GICD_CTLR                    0x0
++#define GICD_CTLR_ENABLEGRP0          0x1
++#define GICR_TYPER                   0x08
++#define GICR_WAKER                   0x14
++#define GICR_IGROUPR0                0x10080
++#define GICR_ISENABLER0              0x10100
++#define GICR_TYPER_AFFINITY_VALUE_SHIFT 32
++#define GICR_TYPER_LAST              0x10
++#define GICR_WAKER_PROCESSORSLEEP    0x2
++#define GICR_WAKER_CHILDRENASLEEP    0x4
++#define ICC_CTLR_EOIMODE             0x1
++#define ICC_SRE_SRE                  0x1
++
++#ifndef ASSEMBLER
++#define PL011_UART
++#endif
++#endif

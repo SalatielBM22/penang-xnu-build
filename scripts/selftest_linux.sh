@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 for s in scripts/*.sh; do bash -n "$s"; done; echo "SHELL_SYNTAX: PASS"
-python3 -m py_compile scripts/build_report.py scripts/check_pkg_signature.py; echo "PY_SYNTAX: PASS"
+python3 -m py_compile scripts/build_report.py scripts/check_pkg_signature.py scripts/inspect_kernel_macho.py; echo "PY_SYNTAX: PASS"
 bash scripts/test_pkg_signature.sh
 python3 - <<'EOF'
 import yaml, sys
@@ -11,6 +11,13 @@ w = yaml.safe_load(open(".github/workflows/measure-xnu-baseline.yml"))
 on = w.get(True, w.get("on"))
 assert "workflow_dispatch" in on and w["jobs"]["build"]["runs-on"] == "macos-15"
 print("WORKFLOW_YAML: PASS")
+import hashlib
+q = yaml.safe_load(open(".github/workflows/build-xnu-qemu-virt.yml"))
+qon, env = q.get(True, q.get("on")), q["env"]
+assert "workflow_dispatch" in qon and q["jobs"]["build"]["runs-on"] == "macos-15"
+assert env["DXB_COMMIT"] == w["env"]["DXB_COMMIT"] and env["MACHINE_CONFIG"] == "QEMU_VIRT"
+assert hashlib.sha256(open(env["PLATFORM_PATCH"], "rb").read()).hexdigest() == env["PLATFORM_PATCH_SHA256"]
+print("QEMU_VIRT_WORKFLOW_YAML_AND_PATCH_PIN: PASS")
 EOF
 DXB_COMMIT=$(sed -nE 's/^  DXB_COMMIT: ([0-9a-f]{40})$/\1/p' .github/workflows/measure-xnu-baseline.yml)
 tmp=$(mktemp -d); git init -q "$tmp"
