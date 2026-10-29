@@ -20,3 +20,13 @@ hardware isolation. Apple monitor, AMCC/KTRR/CTRR, and GPU/storage IOMMU hardwar
 are absent on this platform. Compilation and native linking remain unverified
 until a separately authorized macOS run. The inventory and handoff are in the
 integration repository reports/P0.1E-*; no KDK objects are vendored here.
+
+P0.1G guards only the unused Apple CPU helper include in `osfmk/arm64/sleh.c`
+under `!defined(ARM64_BOARD_CONFIG_QEMU_VIRT)`. Original include order and
+helpers remain unchanged for all other targets. The integration platform
+suite reproduces the four original MPIDR errors using real public headers
+and checks the corrected reduced include path. This is not a complete
+`sleh.o` compilation. The workflow preserves `sleh.o`, its header/hash and
+the derived source on success or failure so a separately authorized run can
+prove whether the object was actually produced. Collector success alone
+does not satisfy P0.1G. See integration `reports/P0.1G-*` for the gate status.

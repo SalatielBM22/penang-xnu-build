@@ -34,7 +34,7 @@ env:
   MACHINE_CONFIG: QEMU_VIRT
   KERNEL_CONFIG: RELEASE
   PLATFORM_PATCH: patches/qemu-virt/qemu-virt-arm64.patch
-  PLATFORM_PATCH_SHA256: eb0a909dd57db261a15c5f5e372a66b3bf64dac3f28b733bc3d6d53969e31166
+  PLATFORM_PATCH_SHA256: f3d1e0286ca0984e2db2d85c35dc85e3c55c10afdca4e418f0d32b6e16da328e
   # Toolchain of the successful VMAPPLE run 40501706707; the job fails if the image changed it.
   DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
   EXPECTED_XCODE: Xcode 16.4 Build version 16F6
@@ -98,6 +98,29 @@ jobs:
           start=$(date +%s)
           ./build.sh 2>&1 | tee ../build.log
           echo "BUILD_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+
+      # P0.1G evidence only. An absent object or a completed collector is never
+      # a compile PASS; preserve the real object for independent inspection.
+      - name: Preserve sleh object evidence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "build_commit=$GITHUB_SHA"
+            echo "run_id=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT"
+            echo "xnu_commit=$XNU_COMMIT patch_sha256=$PLATFORM_PATCH_SHA256"
+            if [ -f dxb/xnu/osfmk/arm64/sleh.c ]; then
+              shasum -a 256 dxb/xnu/osfmk/arm64/sleh.c
+              sed -n '54,64p' dxb/xnu/osfmk/arm64/sleh.c
+            fi
+            if [ -d dxb/build/xnu.obj ]; then
+              while IFS= read -r obj; do
+                shasum -a 256 "$obj"
+                xcrun otool -hv "$obj"
+              done < <(find dxb/build/xnu.obj -type f -name sleh.o)
+            fi
+          } > sleh-object-evidence.txt
+          cat sleh-object-evidence.txt
 
       - name: Confirm darwin-xnu-build patched the source exactly as for VMAPPLE
         shell: bash
@@ -163,6 +186,9 @@ jobs:
             otool-load-commands.txt
             entry-disasm.txt
             ${{ env.PLATFORM_PATCH }}
+            sleh-object-evidence.txt
+            dxb/build/xnu.obj/**/sleh.o
+            dxb/xnu/osfmk/arm64/sleh.c
 
       - name: First errors (failed run only)
         if: failure()
@@ -191,3 +217,6 @@ jobs:
             dxb-patches.txt
             macho-inspection.json
             otool-header.txt
+            sleh-object-evidence.txt
+            dxb/build/xnu.obj/**/sleh.o
+            dxb/xnu/osfmk/arm64/sleh.c
