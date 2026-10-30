@@ -16,6 +16,7 @@ on:
       - scripts/prepare_qemu_virt_source.sh
       - scripts/inspect_kernel_macho.py
       - scripts/build_report.py
+      - scripts/c04_capture_pmap.mjs
 
 permissions:
   contents: read
@@ -168,6 +169,14 @@ jobs:
           } > pcb-object-evidence.txt
           cat pcb-object-evidence.txt
 
+      # C04 diagnostic candidate only. The real build result remains authoritative.
+      # Capture only selected macros and argv; never upload expanded SDK/KDK text.
+      - name: Preserve C04 pmap preprocessing evidence
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: node scripts/c04_capture_pmap.mjs dxb c04-pmap-evidence.json
+
       - name: Confirm darwin-xnu-build patched the source exactly as for VMAPPLE
         shell: bash
         run: |
@@ -241,6 +250,8 @@ jobs:
             pcb-object-evidence.txt
             dxb/build/xnu.obj/**/pcb.o
             dxb/xnu/osfmk/arm64/pcb.c
+            c04-pmap-evidence.json
+            dxb/build/xnu.obj/**/pmap.o.json
 
       - name: First errors (failed run only)
         if: failure()
@@ -278,3 +289,5 @@ jobs:
             pcb-object-evidence.txt
             dxb/build/xnu.obj/**/pcb.o
             dxb/xnu/osfmk/arm64/pcb.c
+            c04-pmap-evidence.json
+            dxb/build/xnu.obj/**/pmap.o.json
