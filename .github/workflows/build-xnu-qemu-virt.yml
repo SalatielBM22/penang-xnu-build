@@ -34,7 +34,7 @@ env:
   MACHINE_CONFIG: QEMU_VIRT
   KERNEL_CONFIG: RELEASE
   PLATFORM_PATCH: patches/qemu-virt/qemu-virt-arm64.patch
-  PLATFORM_PATCH_SHA256: 1d71f1c0b6ac1602b5e1937ea25481e9e3785b22382afb3a50dc6b9d7198e6a6
+  PLATFORM_PATCH_SHA256: 2fbebcac6ad73a1c78f4fc7b437edc1067e34509d00ca2e5e798d680e50fdab2
   # Toolchain of the successful VMAPPLE run 40501706707; the job fails if the image changed it.
   DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
   EXPECTED_XCODE: Xcode 16.4 Build version 16F6
@@ -145,6 +145,29 @@ jobs:
           } > machine-common-object-evidence.txt
           cat machine-common-object-evidence.txt
 
+      # C03 evidence only; collector completion is never a compilation PASS.
+      - name: Preserve pcb object evidence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "build_commit=$GITHUB_SHA"
+            echo "run_id=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT"
+            echo "xnu_commit=$XNU_COMMIT patch_sha256=$PLATFORM_PATCH_SHA256"
+            if [ -f dxb/xnu/osfmk/arm64/pcb.c ]; then
+              shasum -a 256 dxb/xnu/osfmk/arm64/pcb.c
+              sed -n '62,73p' dxb/xnu/osfmk/arm64/pcb.c
+            fi
+            if [ -d dxb/build/xnu.obj ]; then
+              while IFS= read -r obj; do
+                shasum -a 256 "$obj"
+                xcrun otool -hv "$obj"
+                xcrun nm -n "$obj"
+              done < <(find dxb/build/xnu.obj -type f -name pcb.o)
+            fi
+          } > pcb-object-evidence.txt
+          cat pcb-object-evidence.txt
+
       - name: Confirm darwin-xnu-build patched the source exactly as for VMAPPLE
         shell: bash
         run: |
@@ -215,6 +238,9 @@ jobs:
             machine-common-object-evidence.txt
             dxb/build/xnu.obj/**/machine_routines_common.o
             dxb/xnu/osfmk/arm/machine_routines_common.c
+            pcb-object-evidence.txt
+            dxb/build/xnu.obj/**/pcb.o
+            dxb/xnu/osfmk/arm64/pcb.c
 
       - name: First errors (failed run only)
         if: failure()
@@ -249,3 +275,6 @@ jobs:
             machine-common-object-evidence.txt
             dxb/build/xnu.obj/**/machine_routines_common.o
             dxb/xnu/osfmk/arm/machine_routines_common.c
+            pcb-object-evidence.txt
+            dxb/build/xnu.obj/**/pcb.o
+            dxb/xnu/osfmk/arm64/pcb.c

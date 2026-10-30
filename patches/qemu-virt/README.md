@@ -40,3 +40,13 @@ Both object/source evidence sets are uploaded on success or failure; validation
 of a new real ARM64 `machine_routines_common.o` still requires a separately
 authorized CI run. P0.2 remains BLOCKED and P0.3 LINK remains NOT_RUN.
 `CONFIG_PMAP_PPL` remains a static risk for a separate audit, unchanged here.
+
+C03 BUILD_UNBLOCK_03 guards the same unused Apple CPU include in
+`osfmk/arm64/pcb.c` only for QEMU_VIRT. The preceding C01 and C02 patch
+prefix is byte-for-byte unchanged. Four public-header C03 tests reproduce
+the original MPIDR failure, verify the QEMU_VIRT omission, and preserve
+VMAPPLE/T6000 include tokens. These tests are reductions, NOT a full pcb.o
+compilation or a native XNU kernel boot. The CI workflow now archives pcb.o
+and its derived source for independent verification. C03 CI_PASS requires
+an authorized macOS run and a real ARM64 pcb.o. P0.2, P0.3, P0.4 and P0.5
+remain gated on real outputs rather than inferred success.
